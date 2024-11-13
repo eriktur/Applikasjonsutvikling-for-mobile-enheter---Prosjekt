@@ -1,0 +1,7 @@
+{
+  "name": "mobilProsjekt",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "react-vite"
+}
