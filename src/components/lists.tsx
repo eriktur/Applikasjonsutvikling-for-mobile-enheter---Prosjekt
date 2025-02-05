@@ -1,7 +1,6 @@
-// src/components/lists.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import '../style/lists.css';
-import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'; // Import Filesystem
+import { Filesystem, Directory, Encoding, FileInfo } from '@capacitor/filesystem';
 
 interface List {
     name: string;
@@ -13,33 +12,31 @@ const Lists: React.FC = () => {
     const [newListName, setNewListName] = useState('');
     const [selectedListIndex, setSelectedListIndex] = useState<number | null>(null);
     const [showNewListInput, setShowNewListInput] = useState(false);
+    const newListInputRef = useRef<HTMLInputElement | null>(null); // Tillater null
 
-    const newListInputRef = useRef<HTMLInputElement>(null);
-
-    // Save list to a JSON file
     const saveListToFile = async (listName: string, items: { text: string; checked: boolean }[]) => {
         try {
-            await Filesystem.writeFile({
+            const directory = Directory.Data; // Konsistent katalog
+            const result = await Filesystem.writeFile({
                 path: `${listName}.json`,
                 data: JSON.stringify(items),
-                directory: Directory.Documents,
+                directory,
                 encoding: Encoding.UTF8,
             });
-            console.log(`List ${listName} saved successfully.`);
+            console.log(`List ${listName} saved successfully at: ${result.uri}`);
         } catch (error) {
             console.error(`Error saving list ${listName}:`, error);
         }
     };
 
-    // Load list from JSON file
     const loadListFromFile = async (listName: string) => {
         try {
             const result = await Filesystem.readFile({
                 path: `${listName}.json`,
-                directory: Directory.Documents,
+                directory: Directory.Data,
                 encoding: Encoding.UTF8,
             });
-            return JSON.parse(result.data);
+            return JSON.parse(result.data as string); // Typekasting til string
         } catch (error) {
             console.error(`Error loading list ${listName}:`, error);
             return [];
@@ -52,16 +49,41 @@ const Lists: React.FC = () => {
         }
     }, [showNewListInput]);
 
-    // Load existing lists from files on component mount
     useEffect(() => {
         const loadLists = async () => {
-            const loadedLists: List[] = [];
-            for (const list of lists) {
-                const items = await loadListFromFile(list.name);
-                loadedLists.push({ ...list, items });
+            try {
+                const result = await Filesystem.readdir({
+                    path: '',
+                    directory: Directory.Data,
+                });
+
+                const loadedLists: List[] = [];
+
+                for (const file of result.files) {
+                    let fileName: string;
+
+                    if (typeof file === 'string') {
+                        fileName = file;
+                    } else if ((file as FileInfo).name) {
+                        fileName = (file as FileInfo).name;
+                    } else {
+                        continue;
+                    }
+
+                    if (fileName.endsWith('.json')) {
+                        const listName = fileName.replace('.json', '');
+                        const items = await loadListFromFile(listName);
+                        loadedLists.push({ name: listName, items });
+                    }
+                }
+
+                setLists(loadedLists);
+                console.log('Loaded lists:', loadedLists);
+            } catch (error) {
+                console.error('Error reading directory:', error);
             }
-            setLists(loadedLists);
         };
+
         loadLists();
     }, []);
 
@@ -70,25 +92,28 @@ const Lists: React.FC = () => {
             const newList = { name: newListName, items: [] };
             setLists([...lists, newList]);
             setSelectedListIndex(lists.length);
-            saveListToFile(newList.name, newList.items); // Save new list to file
+            saveListToFile(newList.name, newList.items);
             setNewListName('');
             setShowNewListInput(false);
+            console.log(`Added new list: ${newList.name}`);
         }
     };
 
     const selectList = (index: number) => {
         setSelectedListIndex(index);
+        console.log(`Selected list index set to: ${index}`);
     };
 
     const deleteList = async (index: number) => {
         const listName = lists[index].name;
         const updatedLists = lists.filter((_, i) => i !== index);
         setLists(updatedLists);
+        console.log(`List ${listName} deleted. Updated lists:`, updatedLists);
 
         try {
             await Filesystem.deleteFile({
                 path: `${listName}.json`,
-                directory: Directory.Documents,
+                directory: Directory.Data,
             });
             console.log(`List ${listName} deleted successfully.`);
         } catch (error) {
@@ -97,25 +122,28 @@ const Lists: React.FC = () => {
 
         if (selectedListIndex === index) {
             setSelectedListIndex(null);
+            console.log('Selected list index set to null');
         } else if (selectedListIndex !== null && selectedListIndex > index) {
             setSelectedListIndex(selectedListIndex - 1);
+            console.log(`Selected list index adjusted to: ${selectedListIndex - 1}`);
         }
     };
 
-    const addItemToList = (listIndex: number, newItemText: string) => {
+    const addItemToList = useCallback((listIndex: number, newItemText: string) => {
         const updatedLists = lists.map((list, i) => {
             if (i === listIndex) {
                 const updatedItems = [...list.items, { text: newItemText, checked: false }];
-                saveListToFile(list.name, updatedItems); // Save updated list to file
+                saveListToFile(list.name, updatedItems);
                 return { ...list, items: updatedItems };
             } else {
                 return list;
             }
         });
         setLists(updatedLists);
-    };
+        console.log(`Added item to list index ${listIndex}: ${newItemText}`);
+    }, [lists]);
 
-    const toggleItemInList = (listIndex: number, itemIndex: number) => {
+    const toggleItemInList = useCallback((listIndex: number, itemIndex: number) => {
         const updatedLists = lists.map((list, i) => {
             if (i === listIndex) {
                 const updatedItems = list.items.map((item, j) => {
@@ -125,14 +153,15 @@ const Lists: React.FC = () => {
                         return item;
                     }
                 });
-                saveListToFile(list.name, updatedItems); // Save updated list to file
+                saveListToFile(list.name, updatedItems);
                 return { ...list, items: updatedItems };
             } else {
                 return list;
             }
         });
         setLists(updatedLists);
-    };
+        console.log(`Toggled item ${itemIndex} in list index ${listIndex}`);
+    }, [lists]);
 
     return (
         <div className="lists-container">
@@ -147,7 +176,7 @@ const Lists: React.FC = () => {
                         onChange={(e) => setNewListName(e.target.value)}
                         placeholder="Enter list name"
                         className="input-field"
-                        ref={newListInputRef}
+                        ref={newListInputRef} // Tillater null
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                                 addList();
@@ -165,32 +194,28 @@ const Lists: React.FC = () => {
             <div className="list-names">
                 {lists.map((list, index) => (
                     <div key={index} className="list-item">
-            <span
-                onClick={() => selectList(index)}
-                className={`list-name ${selectedListIndex === index ? 'selected-list' : ''}`}
-            >
-              {list.name}
-            </span>
-                        <button
-                            onClick={() => deleteList(index)}
-                            className="delete-list-button"
-                            title="Delete List"
+                        <span
+                            onClick={() => selectList(index)}
+                            className={`list-name ${selectedListIndex === index ? 'selected-list' : ''}`}
                         >
-                            &times;
-                        </button>
+                            {list.name}
+                        </span>
+
                     </div>
                 ))}
             </div>
-            {selectedListIndex !== null && (
+            {selectedListIndex !== null && lists[selectedListIndex] && (
                 <ListDetails
                     list={lists[selectedListIndex]}
                     listIndex={selectedListIndex}
                     addItemToList={addItemToList}
                     toggleItemInList={toggleItemInList}
+                    deleteList={deleteList}
                 />
             )}
         </div>
     );
+
 };
 
 interface ListDetailsProps {
@@ -198,6 +223,7 @@ interface ListDetailsProps {
     listIndex: number;
     addItemToList: (listIndex: number, newItemText: string) => void;
     toggleItemInList: (listIndex: number, itemIndex: number) => void;
+    deleteList: (listIndex: number) => void;
 }
 
 const ListDetails: React.FC<ListDetailsProps> = ({
@@ -205,28 +231,36 @@ const ListDetails: React.FC<ListDetailsProps> = ({
                                                      listIndex,
                                                      addItemToList,
                                                      toggleItemInList,
+                                                     deleteList, // Destructuring av deleteList
                                                  }) => {
     const [newItem, setNewItem] = useState('');
-    const inputRef = useRef<HTMLInputElement>(null);
+    const inputRef = useRef<HTMLInputElement | null>(null); // Tillater null
 
     useEffect(() => {
-        if (inputRef.current) {
-            inputRef.current.focus();
-        }
+        inputRef.current?.focus();
     }, [listIndex]);
 
     const addItem = () => {
         if (newItem.trim()) {
             addItemToList(listIndex, newItem);
             setNewItem('');
+            console.log(`Added new item to list ${list.name}: ${newItem}`);
         }
     };
 
     const toggleItem = (index: number) => {
         toggleItemInList(listIndex, index);
+        console.log(`Toggled item ${index} in list ${list.name}`);
     };
 
-    // Sort items: unchecked items first, checked items at the bottom
+    const handleDelete = () => {
+        const confirmDelete = window.confirm(`Are you sure you want to delete the list "${list.name}"?`);
+        if (confirmDelete) {
+            deleteList(listIndex);
+        }
+    };
+
+
     const sortedItems = list.items
         .map((item, idx) => ({ ...item, originalIndex: idx }))
         .sort((a, b) => {
@@ -236,6 +270,13 @@ const ListDetails: React.FC<ListDetailsProps> = ({
 
     return (
         <div className="list-details">
+            <button
+                onClick={handleDelete}
+                className="delete-list-button-details"
+                title="Delete List"
+            >
+                &times;
+            </button>
             <h2>{list.name}</h2>
             <div className="input-group">
                 <input
